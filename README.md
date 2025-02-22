@@ -13,6 +13,7 @@ mnist_recognition/
 └── src/                   # 源代码目录
     ├── model.py           # 模型定义
     ├── train.py           # 训练脚本
+    ├── predict.py         # 预测脚本
     └── visualize_model.py # 可视化工具
 ```
 
@@ -45,9 +46,28 @@ python train.py  # 首次运行会自动下载MNIST数据集
 python train.py  # 训练完成后会保存最佳模型到 models/best_model.pth
 ```
 
-3. **运行可视化**
+3. **预测单个图片**
+```bash
+python predict.py ../test_images/test.png  # 预测单张图片
+```
+
+4. **运行可视化**
 ```bash
 python visualize_model.py  # 生成所有可视化结果
+```
+
+### 预测功能说明
+predict.py 提供了单张图片的预测功能：
+- 支持多种图片格式（PNG、JPG、JPEG）
+- 自动进行图片预处理（缩放、灰度化、标准化）
+- 显示预测结果和置信度
+- 可视化预处理后的图片效果
+
+使用示例：
+```bash
+python predict.py ../test_images/test.png  # 基本预测
+python predict.py ../test_images/test.png --show  # 显示处理过程
+python predict.py ../test_images/test.png --save result.png  # 保存结果
 ```
 
 ## 模型架构
