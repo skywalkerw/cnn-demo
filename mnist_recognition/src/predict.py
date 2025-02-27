@@ -125,7 +125,7 @@ def main():
             
     else:
         # 预测test_images目录下所有图片
-        test_dir = '../test_images'
+        test_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'test_images')
         image_files = [f for f in os.listdir(test_dir) 
                       if f.endswith(('.png', '.jpg', '.jpeg'))]
         
