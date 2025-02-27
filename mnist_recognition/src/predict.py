@@ -104,7 +104,7 @@ def main():
     args = parser.parse_args()
 
     # 设置路径
-    model_path = 'models/best_model.pth'
+    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models/best_model.pth')
     
     if args.image_path:
         # 预测单张图片
