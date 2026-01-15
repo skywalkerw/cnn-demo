@@ -29,7 +29,12 @@ def predict_digit(image_path: str, model_path: str, ax_row=None, show=False) -> 
         (预测的数字, 置信度)
     """
     # 加载模型
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     model = DigitRecognizer().to(device)
     model.load_state_dict(torch.load(model_path))
     model.eval()

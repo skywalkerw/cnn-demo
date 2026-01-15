@@ -22,30 +22,46 @@ mnist.URLS = [
 ]
 
 def train(model, device, train_loader, optimizer, epoch):
+    # 将模型设置为训练模式，这会启用dropout和batch normalization等训练特有的操作
     model.train()
+    # 初始化训练损失、正确预测数量和总样本数
     train_loss = 0
     correct = 0
     total = 0
     
+    # 使用tqdm创建进度条，显示当前训练进度
     progress_bar = tqdm(train_loader, desc=f'Epoch {epoch}')
+    # 遍历训练数据集的每个批次
     for batch_idx, (data, target) in enumerate(progress_bar):
+        # 将数据和标签移动到指定的设备（CPU或GPU）
         data, target = data.to(device), target.to(device)
+        # 清除优化器中之前累积的梯度
         optimizer.zero_grad()
+        # 前向传播：将数据输入模型得到预测结果
         output = model(data)
+        # 计算预测结果与真实标签之间的损失
         loss = nn.CrossEntropyLoss()(output, target)
+        # 反向传播：计算损失对模型参数的梯度
         loss.backward()
+        # 根据梯度更新模型参数
         optimizer.step()
         
+        # 累加当前批次的损失
         train_loss += loss.item()
+        # 获取预测结果中概率最大的类别作为预测标签
         pred = output.argmax(dim=1, keepdim=True)
+        # 统计正确预测的数量
         correct += pred.eq(target.view_as(pred)).sum().item()
+        # 累加已处理的样本总数
         total += target.size(0)
         
+        # 更新进度条显示当前的平均损失和准确率
         progress_bar.set_postfix({
             'loss': f'{train_loss/(batch_idx+1):.4f}',
             'acc': f'{100.*correct/total:.2f}%'
         })
     
+    # 返回整个epoch的平均损失和准确率
     return train_loss/len(train_loader), 100.*correct/total
 
 def test(model, device, test_loader):
@@ -72,8 +88,13 @@ def main():
     # 设置随机种子
     torch.manual_seed(42)
     
-    # 检查是否可用CUDA
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 检查是否可用CUDA或MPS (Apple Silicon)
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     print(f"Using device: {device}")
     
     # 数据预处理
