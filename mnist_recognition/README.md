@@ -16,30 +16,58 @@
 ```
 mnist_recognition/
 ├── data/                   # 数据集目录
-├── models/                 # 模型保存目录
-├── test_images/           # 测试图片目录
-├── visualizations/        # 可视化结果目录
-└── src/                   # 源代码目录
-    ├── model.py           # 模型定义
-    ├── train.py           # 训练脚本
-    ├── predict.py         # 预测脚本
-    └── visualize_model.py # 可视化工具
+├── src/                    # 源代码目录
+│   ├── models/             # 模型保存目录
+│   ├── model.py            # 模型定义
+│   ├── train.py            # 训练脚本
+│   ├── predict.py          # 预测脚本
+│   └── visualize_model.py  # 可视化工具
+├── test_images/            # 测试图片目录
+└── visualizations/         # 可视化结果目录
 ```
 
 ## 环境要求
 
-- Python 3.6+
-- PyTorch 1.0+
-- torchvision
-- matplotlib
-- numpy
-- pillow
-- tqdm
-- networkx
+- Python 3.12.12 (当前环境: ai_env)
+- PyTorch 2.9.1 (PyPI)
+- torchvision 0.24.1 (PyPI)
+- matplotlib 3.10.8
+- numpy 2.2.6
+- pillow 12.1.0
+- networkx 3.2.1
+- 其他依赖项：
+  * fonttools 4.56.0
+  * cycler 0.12.1
+  * kiwisolver 1.4.4
+  * filelock 3.17.0
+  * fsspec 2025.2.0
+  * jinja2 3.1.5
+  * typing-extensions 4.12.2
 
-安装依赖：
+### 环境设置 (如果 ai_env 不存在)
+如果您的环境中没有 ai_env，可以通过以下命令创建：
 ```bash
-pip install torch torchvision matplotlib numpy pillow tqdm networkx
+# 创建 ai_env 环境
+conda create -n ai_env python=3.12
+
+# 确保 pip 版本是最新的以保证兼容性
+python -m pip install --upgrade pip
+
+# 激活环境
+conda activate ai_env
+
+# 安装所需包
+pip install torch torchvision numpy matplotlib pillow networkx tqdm
+```
+
+**重要提示**: 如果 ai_env 已存在，请确保使用该环境运行项目：
+```bash
+conda activate ai_env
+```
+
+检查当前环境的包版本：
+```bash
+python -c "import torch, torchvision, matplotlib, numpy, PIL; print('All required packages available')"
 ```
 
 ## 快速开始
@@ -57,10 +85,15 @@ python train.py  # 训练完成后会保存最佳模型到 models/best_model.pth
 
 3. **预测单个图片**
 ```bash
-python predict.py ../test_images/test.png  # 预测单张图片
+python predict.py ../test_images/digit_2_1.png  # 预测单张图片
 ```
 
-4. **运行可视化**
+4. **预测所有测试图片**
+```bash
+python predict.py  # 不带参数时会预测test_images目录下所有图片
+```
+
+5. **运行可视化**
 ```bash
 python visualize_model.py  # 生成所有可视化结果
 ```
@@ -71,49 +104,85 @@ predict.py 提供了单张图片的预测功能：
 - 自动进行图片预处理（缩放、灰度化、标准化）
 - 显示预测结果和置信度
 - 可视化预处理后的图片效果
+- 自动重命名高置信度（>90%）的图片
 
 使用示例：
 ```bash
-python predict.py ../test_images/test.png  # 基本预测
-python predict.py ../test_images/test.png --show  # 显示处理过程
-python predict.py ../test_images/test.png --save result.png  # 保存结果
+python predict.py ../test_images/digit_2_1.png  # 基本预测
+python predict.py ../test_images/digit_2_1.png --show  # 显示处理过程
+python predict.py ../test_images/digit_2_1.png --save result.png  # 保存结果
 ```
 
 ## 模型架构
 
-### 网络结构
-- 输入层：28×28 灰度图像
-- 卷积层1：32个3×3卷积核，ReLU激活，2×2最大池化
-  * 输入尺寸：28×28×1
-  * 输出尺寸：14×14×32
-  * 参数量：(3×3×1+1)×32 = 320
-- 卷积层2：64个3×3卷积核，ReLU激活，2×2最大池化
-  * 输入尺寸：14×14×32
-  * 输出尺寸：7×7×64
-  * 参数量：(3×3×32+1)×64 = 18,496
-- 全连接层1：7×7×64 → 128，ReLU激活，Dropout(0.5)
-  * 输入维度：3,136 (7×7×64)
-  * 输出维度：128
-  * 参数量：3,136×128 + 128 = 401,536
-- 全连接层2：128 → 10，Softmax输出
-  * 输入维度：128
-  * 输出维度：10
-  * 参数量：128×10 + 10 = 1,290
+### 网络结构详解
+本项目使用了一个简洁而高效的卷积神经网络（CNN）来识别手写数字。网络结构如下：
 
-总参数量：421,642
+#### 输入层
+- 输入尺寸：28×28 灰度图像（单通道）
+- 数据预处理：
+  * 灰度化：将彩色图像转换为灰度图像
+  * 填充：添加3像素的边框，确保数字位于中心
+  * 缩放：保持宽高比的情况下缩放到28×28
+  * 反转：将黑底白字转换为白底黑字（与MNIST数据集一致）
+  * 对比度增强：增强图像对比度，突出数字轮廓
+  * 二值化：将像素值大于0.085的设为1，其余设为0
+  * 标准化：使用MNIST数据集的统计参数(均值=0.1307, 标准差=0.3081)
 
-### 数据预处理
-- 图像缩放：保持宽高比的情况下缩放到28×28
-- 灰度化：转换为单通道灰度图像
-- 像素归一化：值域从[0,255]映射到[0,1]
-- 标准化：使用MNIST数据集的统计参数(均值=0.1307, 标准差=0.3081)
+#### 卷积层1
+- 结构：32个3×3卷积核，步长为1，ReLU激活函数
+- 输入尺寸：28×28×1
+- 输出尺寸：26×26×32（卷积后）
+- 池化：2×2最大池化，步长为2
+- 池化后尺寸：13×13×32
+- 参数量：(3×3×1+1)×32 = 320（包括偏置项）
+- 作用：提取基本特征，如边缘、角点等
+
+#### 卷积层2
+- 结构：64个3×3卷积核，步长为1，ReLU激活函数
+- 输入尺寸：13×13×32
+- 输出尺寸：11×11×64（卷积后）
+- 池化：2×2最大池化，步长为2
+- 池化后尺寸：5×5×64
+- 参数量：(3×3×32+1)×64 = 18,496（包括偏置项）
+- 作用：提取更高级的特征组合，如笔画形状、数字部分结构等
+
+#### 全连接层1
+- 结构：线性变换，ReLU激活，Dropout(0.5)
+- 输入维度：1,600 (5×5×64)
+- 输出维度：128
+- 参数量：1,600×128 + 128 = 204,928（包括偏置项）
+- 作用：整合特征，学习数字的抽象表示
+- Dropout：防止过拟合，提高模型泛化能力
+
+#### 全连接层2（输出层）
+- 结构：线性变换，Softmax输出
+- 输入维度：128
+- 输出维度：10（对应0-9十个数字）
+- 参数量：128×10 + 10 = 1,290（包括偏置项）
+- 作用：将特征映射到10个数字类别的概率分布
+
+#### 总参数量
+- 卷积层：320 + 18,496 = 18,816
+- 全连接层：204,928 + 1,290 = 206,218
+- 总计：225,034 参数
+
+### 网络特点
+1. **轻量级设计**：相比于VGG、ResNet等大型网络，参数量少，适合在CPU上运行
+2. **双卷积层结构**：通过两层卷积提取不同层次的特征
+3. **Dropout正则化**：有效防止过拟合，提高模型泛化能力
+4. **ReLU激活函数**：解决梯度消失问题，加速训练收敛
+5. **最大池化**：减少参数量，保留重要特征，提高位置不变性
 
 ### 训练参数
-- 优化器：Adam
-- 损失函数：CrossEntropyLoss
+- 优化器：Adam（自适应矩估计）
+  * 学习率：0.001（默认）
+  * Beta参数：(0.9, 0.999)
+  * Epsilon：1e-8
+- 损失函数：CrossEntropyLoss（交叉熵损失）
 - 批量大小：64
 - 训练轮数：10
-- 学习率：自适应（Adam）
+- 早停策略：验证集准确率连续3轮无提升则停止训练
 
 ## 可视化功能
 
@@ -146,6 +215,26 @@ python predict.py ../test_images/test.png --save result.png  # 保存结果
 - 训练集准确率：~99.5%
 - 测试集准确率：~99%
 - 单张图片推理时间：<0.1s (CPU)
+
+## 预测功能特色
+
+1. **自动图像处理**
+   - 自动调整图像大小和对比度
+   - 二值化处理提高识别准确率
+   - 支持各种格式和尺寸的输入图像
+
+2. **批量处理**
+   - 支持处理整个目录的图像
+   - 自动生成可视化结果
+
+3. **智能文件命名**
+   - 对于置信度高于90%的预测，自动重命名文件
+   - 格式为"digit_X.png"或"digit_X_Y.png"（X为预测数字，Y为序号）
+
+4. **详细预测信息**
+   - 显示预测结果和置信度
+   - 提供Top-3预测结果及其概率
+   - 可视化原始图像和处理后的图像
 
 ## 注意事项
 
