@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 from PIL import Image
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 from model import DigitRecognizer
 from typing import Tuple
 import os
@@ -153,7 +154,7 @@ def main():
         fig.subplots_adjust(left=0.05, right=0.95, bottom=0.02, top=0.98, wspace=0.3, hspace=0.4)
         
         # 创建网格布局，单列多行
-        gs = plt.GridSpec(n_images, 4, figure=fig)
+        gs = GridSpec(n_images, 4, figure=fig)
         
         # 处理每张图片
         for idx, image_file in enumerate(sorted(image_files)):
@@ -197,26 +198,34 @@ def main():
                            horizontalalignment='center',
                            verticalalignment='center')
                     ax.axis('off')
-        
+         
         # 调整图像以适应屏幕
-        mng = plt.get_current_fig_manager()
         try:
-            # 尝试使用Qt后端
-            screen_width = 1920  # 假设屏幕宽度
-            screen_height = 1080  # 假设屏幕高度
-            window_width = min(screen_width - 100, int(screen_width * 0.9))
-            window_height = min(screen_height - 100, int(screen_height * 0.9))
-            mng.window.setGeometry(50, 50, window_width, window_height)
-            mng.window.showMaximized()
-        except:
-            try:
-                # 尝试使用Tk后端
-                mng.window.state('zoomed')
-            except:
+            mng = plt.get_current_fig_manager()
+            if hasattr(mng, 'window'):
                 try:
-                    mng.resize(*mng.window.maxsize())
+                    # 尝试使用Qt后端
+                    screen_width = 1920  # 假设屏幕宽度
+                    screen_height = 1080  # 假设屏幕高度
+                    window_width = min(screen_width - 100, int(screen_width * 0.9))
+                    window_height = min(screen_height - 100, int(screen_height * 0.9))
+                    if hasattr(mng.window, 'setGeometry'):
+                        mng.window.setGeometry(50, 50, window_width, window_height)
+                    if hasattr(mng.window, 'showMaximized'):
+                        mng.window.showMaximized()
                 except:
-                    pass
+                    try:
+                        # 尝试使用Tk后端
+                        if hasattr(mng.window, 'state'):
+                            mng.window.state('zoomed')
+                    except:
+                        try:
+                            if hasattr(mng, 'resize') and hasattr(mng.window, 'maxsize'):
+                                mng.resize(*mng.window.maxsize())
+                        except:
+                            pass
+        except:
+            pass
         
         plt.show()
 

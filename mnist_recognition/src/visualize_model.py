@@ -7,7 +7,6 @@ from torchvision import transforms
 from PIL import Image
 import os
 import torch.nn.functional as F
-import networkx as nx
 
 # 设置中文字体
 plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # Mac OS的中文字体
@@ -47,10 +46,10 @@ def visualize_filters(model, layer_name, save_path=None):
     n_rows = (n_filters + n_cols - 1) // n_cols
     
     # 创建图形，设置更大的画布
-    fig = plt.figure(figsize=(2*n_cols, 2*n_rows + 3))
+    fig = plt.figure(figsize=(2*n_cols, 2*n_rows + 4))  # 增加高度
     
     # 创建两个子图区域，并调整它们之间的间距
-    gs = plt.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.3)
+    gs = plt.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.4)  # 增加间距
     
     # 上半部分绘制滤波器
     ax_filters = fig.add_subplot(gs[0])
@@ -67,7 +66,7 @@ def visualize_filters(model, layer_name, save_path=None):
             ax.imshow(weights[i].mean(0), cmap='gray')
         ax.axis('off')
     
-    plt.suptitle(f'Filters visualization - {layer_name}', y=0.95)
+    plt.suptitle(f'Filters visualization - {layer_name}', y=0.98)  # 调整标题位置
     
     # 下半部分放置说明文字
     ax_text = fig.add_subplot(gs[1])
@@ -76,14 +75,14 @@ def visualize_filters(model, layer_name, save_path=None):
         f"不同位置的权重大小。亮色区域表示正权重，暗色区域表示负权重。这些卷积核用于提取输入图像中的\n"
         f"不同特征，如边缘、纹理等。"
     )
-    ax_text.text(0.05, 0.5, description,
+    ax_text.text(0.05, 0.3, description,
                 wrap=False,
                 va='center',
                 fontsize=10)
     ax_text.axis('off')
     
     # 调整布局，确保子图之间有足够间距
-    plt.subplots_adjust(top=0.9, bottom=0.1, hspace=0.4)
+    plt.subplots_adjust(top=0.95, bottom=0.05, hspace=0.5)  # 增加间距
     
     if save_path:
         plt.savefig(save_path, bbox_inches='tight', dpi=300)
@@ -175,29 +174,33 @@ def visualize_feature_maps(model, image_path, save_path=None):
 
 def visualize_weights_distribution(model, save_path=None):
     """可视化模型各层权重的分布"""
-    n_weights = sum(1 for name, _ in model.named_parameters() if 'weight' in name)
-    plt.figure(figsize=(5*n_weights, 7))
+    # 获取所有权重层
+    weight_layers = [(name, param) for name, param in model.named_parameters() if 'weight' in name]
+    n_weights = len(weight_layers)
+    
+    # 创建图形，根据权重层数量调整大小
+    fig = plt.figure(figsize=(5*n_weights, 7))
     
     # 创建两个子图区域，并调整它们之间的间距
     gs = plt.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.3)
     
     # 上半部分绘制权重分布
-    ax_dist = plt.subplot(gs[0])
-    plot_idx = 1
+    ax_dist = fig.add_subplot(gs[0])
     
-    for name, param in model.named_parameters():
-        if 'weight' in name:
-            plt.subplot(1, n_weights, plot_idx)
-            plt.hist(param.data.cpu().numpy().flatten(), bins=50)
-            plt.title(f'Distribution - {name}')
-            plt.xlabel('Weight value')
-            plt.ylabel('Frequency')
-            plot_idx += 1
+    # 绘制每个权重层的分布
+    for idx, (name, param) in enumerate(weight_layers):
+        plt.subplot(1, n_weights, idx+1)
+        weights = param.data.cpu().numpy().flatten()
+        plt.hist(weights, bins=50, density=True, alpha=0.7)
+        plt.title(f'Distribution - {name}')
+        plt.xlabel('Weight value')
+        if idx == 0:  # 只在第一个子图显示y轴标签
+            plt.ylabel('Density')
     
     plt.suptitle('Neural Network Weights Distribution', y=0.95)
     
     # 下半部分放置说明文字
-    ax_text = plt.subplot(gs[1])
+    ax_text = fig.add_subplot(gs[1])
     description = (
         "该图展示了神经网络各层权重的分布情况。横轴表示权重值，纵轴表示该权重值出现的频率。钟形曲线表示\n"
         "权重呈现正态分布，这是神经网络训练良好的一个标志。不同层的权重分布反映了该层在网络中的作用和\n"
@@ -649,6 +652,210 @@ def visualize_network_structure(model, input_size=(1, 1, 28, 28), save_path=None
         plt.savefig(save_path, bbox_inches='tight', dpi=300)
     plt.show()
 
+def visualize_activation_distribution(model, image_path, save_path=None):
+    """可视化每一层的激活值分布"""
+    # 图像预处理
+    transform = transforms.Compose([
+        transforms.Grayscale(),
+        transforms.Pad(padding=3, fill=0),
+        transforms.Resize((28, 28)),
+        transforms.ToTensor(),
+        transforms.Lambda(lambda x: 1.0 - x),
+        transforms.Lambda(lambda x: torch.clamp((x - x.min()) / (x.max() - x.min() + 1e-8) * 1.5, 0, 1)),
+        transforms.Lambda(lambda x: torch.where(x > 0.085, torch.ones_like(x), torch.zeros_like(x))),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    
+    # 加载和处理图像
+    image = Image.open(image_path).convert('L')
+    image_tensor = transform(image).unsqueeze(0)
+    
+    # 注册钩子来获取激活值
+    activations = {}
+    def hook_fn(name):
+        def hook(module, input, output):
+            activations[name] = output.detach().cpu()
+        return hook
+    
+    # 为所有层注册钩子
+    handles = []
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Conv2d, nn.Linear, nn.ReLU, nn.MaxPool2d)):
+            handles.append(module.register_forward_hook(hook_fn(name)))
+    
+    # 前向传播
+    model.eval()
+    with torch.no_grad():
+        output = model(image_tensor)
+    
+    # 移除钩子
+    for handle in handles:
+        handle.remove()
+    
+    # 创建图形
+    n_layers = len(activations)
+    fig = plt.figure(figsize=(15, 5))
+    
+    # 绘制每一层的激活值分布
+    for idx, (name, activation) in enumerate(activations.items()):
+        plt.subplot(1, n_layers, idx+1)
+        activation_flat = activation.numpy().flatten()
+        plt.hist(activation_flat, bins=50, density=True, alpha=0.7)
+        plt.title(f'Activation - {name}')
+        plt.xlabel('Activation value')
+        if idx == 0:
+            plt.ylabel('Density')
+    
+    plt.suptitle('Neural Network Activation Distribution', y=0.95)
+    
+    # 添加说明文字
+    description = (
+        "该图展示了神经网络各层的激活值分布。横轴表示激活值，纵轴表示该激活值出现的频率。\n"
+        "不同层的激活分布反映了该层对输入特征的响应特性。"
+    )
+    plt.figtext(0.1, 0.02, description, wrap=True, fontsize=10)
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    plt.close()
+
+def visualize_gradient_flow(model, image_path, save_path=None):
+    """可视化梯度流动"""
+    # 图像预处理
+    transform = transforms.Compose([
+        transforms.Grayscale(),
+        transforms.Pad(padding=3, fill=0),
+        transforms.Resize((28, 28)),
+        transforms.ToTensor(),
+        transforms.Lambda(lambda x: 1.0 - x),
+        transforms.Lambda(lambda x: torch.clamp((x - x.min()) / (x.max() - x.min() + 1e-8) * 1.5, 0, 1)),
+        transforms.Lambda(lambda x: torch.where(x > 0.085, torch.ones_like(x), torch.zeros_like(x))),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    
+    # 加载和处理图像
+    image = Image.open(image_path).convert('L')
+    image_tensor = transform(image).unsqueeze(0)
+    image_tensor.requires_grad_()
+    
+    # 注册钩子来获取梯度
+    gradients = {}
+    def hook_fn(name):
+        def hook(module, grad_input, grad_output):
+            if grad_output[0] is not None:
+                gradients[name] = grad_output[0].detach().cpu()
+        return hook
+    
+    # 为所有层注册钩子
+    handles = []
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Conv2d, nn.Linear)):
+            handles.append(module.register_backward_hook(hook_fn(name)))
+    
+    # 前向传播和反向传播
+    model.eval()
+    output = model(image_tensor)
+    loss = F.cross_entropy(output, torch.tensor([3]))  # 假设目标类别为3
+    loss.backward()
+    
+    # 移除钩子
+    for handle in handles:
+        handle.remove()
+    
+    # 创建图形
+    n_layers = len(gradients)
+    fig = plt.figure(figsize=(15, 5))
+    
+    # 绘制每一层的梯度分布
+    for idx, (name, gradient) in enumerate(gradients.items()):
+        plt.subplot(1, n_layers, idx+1)
+        gradient_flat = gradient.numpy().flatten()
+        plt.hist(gradient_flat, bins=50, density=True, alpha=0.7)
+        plt.title(f'Gradient - {name}')
+        plt.xlabel('Gradient value')
+        if idx == 0:
+            plt.ylabel('Density')
+    
+    plt.suptitle('Neural Network Gradient Flow', y=0.95)
+    
+    # 添加说明文字
+    description = (
+        "该图展示了神经网络各层的梯度分布。横轴表示梯度值，纵轴表示该梯度值出现的频率。\n"
+        "梯度的分布反映了网络各层的学习状态和更新方向。"
+    )
+    plt.figtext(0.1, 0.02, description, wrap=True, fontsize=10)
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    plt.close()
+
+def visualize_attention_maps(model, image_path, save_path=None):
+    """可视化注意力图"""
+    # 图像预处理
+    transform = transforms.Compose([
+        transforms.Grayscale(),
+        transforms.Pad(padding=3, fill=0),
+        transforms.Resize((28, 28)),
+        transforms.ToTensor(),
+        transforms.Lambda(lambda x: 1.0 - x),
+        transforms.Lambda(lambda x: torch.clamp((x - x.min()) / (x.max() - x.min() + 1e-8) * 1.5, 0, 1)),
+        transforms.Lambda(lambda x: torch.where(x > 0.085, torch.ones_like(x), torch.zeros_like(x))),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    
+    # 加载和处理图像
+    image = Image.open(image_path).convert('L')
+    image_tensor = transform(image).unsqueeze(0)
+    
+    # 注册钩子来获取特征图
+    feature_maps = {}
+    def hook_fn(name):
+        def hook(module, input, output):
+            feature_maps[name] = output.detach().cpu()
+        return hook
+    
+    # 为卷积层注册钩子
+    handles = []
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            handles.append(module.register_forward_hook(hook_fn(name)))
+    
+    # 前向传播
+    model.eval()
+    with torch.no_grad():
+        output = model(image_tensor)
+    
+    # 移除钩子
+    for handle in handles:
+        handle.remove()
+    
+    # 创建图形
+    n_layers = len(feature_maps)
+    fig = plt.figure(figsize=(15, 5))
+    
+    # 绘制每一层的注意力图
+    for idx, (name, feature_map) in enumerate(feature_maps.items()):
+        plt.subplot(1, n_layers, idx+1)
+        # 计算注意力图（特征图的平均值）
+        attention_map = feature_map.mean(dim=1).squeeze()
+        plt.imshow(attention_map, cmap='hot')
+        plt.title(f'Attention - {name}')
+        plt.axis('off')
+        plt.colorbar()
+    
+    plt.suptitle('Neural Network Attention Maps', y=0.95)
+    
+    # 添加说明文字
+    description = (
+        "该图展示了神经网络各卷积层的注意力图。颜色越亮表示该区域的特征越显著。\n"
+        "注意力图反映了网络在识别过程中关注的重点区域。"
+    )
+    plt.figtext(0.1, 0.02, description, wrap=True, fontsize=10)
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    plt.close()
+
 def main():
     # 创建保存目录
     os.makedirs('visualizations', exist_ok=True)
@@ -679,6 +886,14 @@ def main():
         visualize_feature_maps(model, image_path, 'visualizations/04_feature_maps.png')
         plt.close()
         visualize_pixel_contribution(model, image_path, 'visualizations/05_pixel_contribution.png')
+        plt.close()
+        
+        # 新增的可视化方法
+        visualize_activation_distribution(model, image_path, 'visualizations/07_activation_distribution.png')
+        plt.close()
+        visualize_gradient_flow(model, image_path, 'visualizations/08_gradient_flow.png')
+        plt.close()
+        visualize_attention_maps(model, image_path, 'visualizations/09_attention_maps.png')
         plt.close()
     
     # 5. 网络结构可视化（保存并显示）

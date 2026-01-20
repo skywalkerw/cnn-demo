@@ -13,15 +13,7 @@ import torchvision.datasets.mnist as mnist
 # Disable SSL certificate verification
 ssl._create_default_https_context = ssl._create_unverified_context
 
-# 修改MNIST数据集下载地址为国内镜像
-mnist.URLS = [
-    'https://mirrors.tuna.tsinghua.edu.cn/pytorch-datasets/MNIST/train-images-idx3-ubyte.gz',
-    'https://mirrors.tuna.tsinghua.edu.cn/pytorch-datasets/MNIST/train-labels-idx1-ubyte.gz',
-    'https://mirrors.tuna.tsinghua.edu.cn/pytorch-datasets/MNIST/t10k-images-idx3-ubyte.gz',
-    'https://mirrors.tuna.tsinghua.edu.cn/pytorch-datasets/MNIST/t10k-labels-idx1-ubyte.gz'
-]
-
-def train(model, device, train_loader, optimizer, epoch):
+def train(model, device, train_loader, optimizer, epoch, criterion, scaler=None):
     # 将模型设置为训练模式，这会启用dropout和batch normalization等训练特有的操作
     model.train()
     # 初始化训练损失、正确预测数量和总样本数
@@ -33,18 +25,29 @@ def train(model, device, train_loader, optimizer, epoch):
     progress_bar = tqdm(train_loader, desc=f'Epoch {epoch}')
     # 遍历训练数据集的每个批次
     for batch_idx, (data, target) in enumerate(progress_bar):
-        # 将数据和标签移动到指定的设备（CPU或GPU）
-        data, target = data.to(device), target.to(device)
+        # 使用非阻塞传输，允许数据传输和计算重叠
+        data, target = data.to(device, non_blocking=True), target.to(device, non_blocking=True)
         # 清除优化器中之前累积的梯度
         optimizer.zero_grad()
-        # 前向传播：将数据输入模型得到预测结果
-        output = model(data)
-        # 计算预测结果与真实标签之间的损失
-        loss = nn.CrossEntropyLoss()(output, target)
-        # 反向传播：计算损失对模型参数的梯度
-        loss.backward()
-        # 根据梯度更新模型参数
-        optimizer.step()
+        
+        # 混合精度训练（仅CUDA支持，MPS支持有限）
+        if scaler is not None:
+            with torch.cuda.amp.autocast():
+                output = model(data)
+                loss = criterion(output, target)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            # 标准精度训练（MPS或CPU）
+            # 前向传播：将数据输入模型得到预测结果
+            output = model(data)
+            # 计算预测结果与真实标签之间的损失
+            loss = criterion(output, target)
+            # 反向传播：计算损失对模型参数的梯度
+            loss.backward()
+            # 根据梯度更新模型参数
+            optimizer.step()
         
         # 累加当前批次的损失
         train_loss += loss.item()
@@ -64,7 +67,7 @@ def train(model, device, train_loader, optimizer, epoch):
     # 返回整个epoch的平均损失和准确率
     return train_loss/len(train_loader), 100.*correct/total
 
-def test(model, device, test_loader):
+def test(model, device, test_loader, criterion):
     model.eval()
     test_loss = 0
     correct = 0
@@ -72,9 +75,10 @@ def test(model, device, test_loader):
     
     with torch.no_grad():
         for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
+            # 使用非阻塞传输
+            data, target = data.to(device, non_blocking=True), target.to(device, non_blocking=True)
             output = model(data)
-            test_loss += nn.CrossEntropyLoss()(output, target).item()
+            test_loss += criterion(output, target).item()
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
             total += target.size(0)
@@ -108,12 +112,91 @@ def main():
     train_dataset = datasets.MNIST(data_dir, train=True, download=False, transform=transform)
     test_dataset = datasets.MNIST(data_dir, train=False, download=False, transform=transform)
     
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=1000)
+    # 根据硬件配置优化数据加载（M4 Pro: 12核CPU, 24GB内存, 16核GPU）
+    # num_workers: M4 Pro有12核心，使用8个worker（留4个给系统和MPS处理）
+    # batch_size: 16核GPU需要足够大的batch size才能充分利用并行能力
+    #             24GB统一内存允许更大的batch size，模型很小（22.5万参数）
+    # pin_memory: MPS使用统一内存架构，作用有限但保留也无妨
+    # prefetch_factor: 增加预取数量，充分利用多核CPU处理能力
+    use_gpu = device.type in ['cuda', 'mps']
+    
+    # 根据设备类型调整参数
+    if device.type == 'mps':
+        # M4 Pro优化配置：16核GPU + 24GB统一内存
+        # 对于16核GPU，更大的batch size可以更好地利用并行能力
+        # 可以尝试: 512, 768, 1024 (如果内存允许)
+        train_batch_size = 768  # 16核GPU，使用更大的batch size以充分利用并行能力
+        train_num_workers = 8   # 12核CPU，使用8个worker
+        train_prefetch = 4      # 更多预取以隐藏I/O延迟
+        pin_memory = False      # MPS统一内存，pin_memory意义不大
+    else:
+        # CUDA或CPU配置
+        train_batch_size = 256
+        train_num_workers = 4
+        train_prefetch = 2
+        pin_memory = use_gpu
+    
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=train_batch_size,
+        shuffle=True,
+        num_workers=train_num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=train_prefetch,
+        persistent_workers=True if train_num_workers > 0 else False
+    )
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=1000,
+        num_workers=min(4, train_num_workers),  # 测试时使用较少进程
+        pin_memory=pin_memory,
+        prefetch_factor=train_prefetch,
+        persistent_workers=True if train_num_workers > 0 else False
+    )
+    
+    print(f"DataLoader配置: batch_size={train_batch_size}, num_workers={train_num_workers}, "
+          f"prefetch_factor={train_prefetch}, pin_memory={pin_memory}")
+    print(f"硬件配置: 12核CPU, 16核GPU, 24GB统一内存")
+    print(f"提示: 如果遇到内存不足，可以将batch_size降至512或384")
     
     # 初始化模型
-    model = DigitRecognizer().to(device)
-    optimizer = optim.Adam(model.parameters())
+    original_model = DigitRecognizer().to(device)
+    
+    # 使用torch.compile优化模型（PyTorch 2.0+）
+    # 注意：MPS目前不支持torch.compile，只有CUDA支持
+    # 这会编译模型图，显著提升推理和训练速度
+    if device.type == 'cuda' and hasattr(torch, 'compile'):
+        try:
+            model = torch.compile(original_model, mode='reduce-overhead')
+            print("Model compiled with torch.compile for better performance")
+        except Exception as e:
+            print(f"torch.compile failed (will use normal mode): {e}")
+            model = original_model
+    elif device.type == 'mps':
+        print("MPS device: torch.compile not supported, using eager mode")
+        model = original_model
+    else:
+        model = original_model
+    
+    # 优化器设置
+    # 对于更大的batch size，Adam优化器的默认学习率仍然适用（自适应优化器）
+    # 如果需要，可以按比例调整：lr = base_lr * (batch_size / base_batch_size)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    
+    # 创建损失函数对象（避免每次循环都创建新对象）
+    criterion = nn.CrossEntropyLoss()
+    
+    # 混合精度训练（MPS支持有限）
+    scaler = None
+    if device.type == 'cuda':
+        scaler = torch.cuda.amp.GradScaler()
+        print("Using mixed precision training (AMP)")
+    elif device.type == 'mps':
+        # MPS的混合精度支持有限，暂时不使用
+        print("MPS detected: Using full precision training (mixed precision not recommended)")
+        
+        # MPS特定优化：确保使用高效的设置
+        # 统一内存架构下，MPS会自动管理内存，无需额外设置
     
     # 训练参数
     epochs = 10
@@ -128,8 +211,8 @@ def main():
     
     # 训练循环
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc = train(model, device, train_loader, optimizer, epoch)
-        test_loss, test_acc = test(model, device, test_loader)
+        train_loss, train_acc = train(model, device, train_loader, optimizer, epoch, criterion, scaler)
+        test_loss, test_acc = test(model, device, test_loader, criterion)
         
         train_losses.append(train_loss)
         test_losses.append(test_loss)
